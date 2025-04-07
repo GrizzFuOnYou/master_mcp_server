@@ -1,7 +1,8 @@
 """
 AI MCP Server Startup Script
 
-This script starts the AI MCP server and connects to available Ollama models.
+This script starts the AI MCP server and connects to available AI models
+including Ollama for local models and Claude for cloud-based inference.
 """
 
 import os
@@ -28,7 +29,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("mcp_startup")
 
-# Configuration
+# MCP Server configuration
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", "8000"))
 MCP_API_KEY = os.getenv("MCP_API_KEY", "your-secret-api-key")
@@ -37,6 +38,12 @@ SERVER_URL = f"http://localhost:{MCP_PORT}"
 # Ollama configuration
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 CONNECT_OLLAMA_MODELS = os.getenv("CONNECT_OLLAMA_MODELS", "true").lower() == "true"
+
+# Claude configuration
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY", "")
+CLAUDE_MODEL_ID = os.getenv("CLAUDE_MODEL_ID", "claude-3-5-sonnet-20240620")
+CLAUDE_BASE_URL = os.getenv("CLAUDE_BASE_URL", "https://api.anthropic.com")
+CONNECT_CLAUDE = os.getenv("CONNECT_CLAUDE", "true").lower() == "true" and CLAUDE_API_KEY
 
 def start_mcp_server():
     """Start the MCP server"""
@@ -104,7 +111,7 @@ def check_ollama():
         logger.error(f"Error connecting to Ollama: {str(e)}")
         return []
 
-def connect_to_models(client, model_names):
+def connect_to_ollama_models(client, model_names):
     """Connect to Ollama models"""
     logger.info("Connecting to Ollama models...")
     
@@ -127,6 +134,37 @@ def connect_to_models(client, model_names):
     
     return connected_models
 
+def connect_to_claude(client):
+    """Connect to Claude model"""
+    if not CLAUDE_API_KEY:
+        logger.warning("Claude API key not set. Skipping Claude connection.")
+        return False
+        
+    logger.info(f"Connecting to Claude model: {CLAUDE_MODEL_ID}")
+    
+    # Prepare configuration
+    config = {
+        "api_key": CLAUDE_API_KEY,
+        "model_id": CLAUDE_MODEL_ID,
+        "base_url": CLAUDE_BASE_URL,
+        "max_tokens": 1000,
+        "temperature": 0.7
+    }
+    
+    # Connect to Claude
+    result = client.connect_model(
+        CLAUDE_MODEL_ID,
+        "claude",
+        config
+    )
+    
+    if result.get("success", False):
+        logger.info(f"Successfully connected to Claude model: {CLAUDE_MODEL_ID}")
+        return True
+    else:
+        logger.error(f"Failed to connect to Claude model: {result.get('error')}")
+        return False
+
 def main():
     """Main function"""
     logger.info("Starting AI MCP startup script...")
@@ -139,17 +177,24 @@ def main():
     # Initialize client
     client = MCPClient(SERVER_URL, MCP_API_KEY)
     
+    # Connect to Claude as the default model (if enabled)
+    if CONNECT_CLAUDE:
+        if connect_to_claude(client):
+            logger.info("Claude is now the default AI model")
+        else:
+            logger.warning("Failed to connect to Claude as the default model")
+    
     # Connect to Ollama models if enabled
     if CONNECT_OLLAMA_MODELS:
         model_names = check_ollama()
         
         if model_names:
-            connected_models = connect_to_models(client, model_names)
+            connected_models = connect_to_ollama_models(client, model_names)
             
             if connected_models:
-                logger.info(f"Connected to models: {', '.join(connected_models)}")
+                logger.info(f"Connected to Ollama models: {', '.join(connected_models)}")
             else:
-                logger.warning("Failed to connect to any models")
+                logger.warning("Failed to connect to any Ollama models")
         else:
             logger.warning("No Ollama models available")
     
