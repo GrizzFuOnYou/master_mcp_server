@@ -328,3 +328,159 @@ async def connect_model(
         }
         
     return result
+
+@app.post("/execute_task", response_model=TaskResponse)
+async def execute_task(
+    request: TaskRequest,
+    background_tasks: BackgroundTasks,
+    api_key: str = Depends(verify_api_key)
+):
+    """Execute a task requested by an AI model"""
+    task_id = f"task_{int(time.time())}_{len(tasks) + 1}"
+    model_id = request.model_id
+    task_type = request.task_type
+    data = request.data
+    
+    # Initialize task
+    tasks[task_id] = {
+        "status": "processing",
+        "model_id": model_id,
+        "task_type": task_type,
+        "data": data,
+        "result": None,
+        "error": None
+    }
+    
+    async def process_task():
+        try:
+            if task_type == "system_command":
+                command = SystemCommand(**data)
+                result = execute_system_command(command)
+                
+            elif task_type == "file_operation":
+                operation = FileOperation(**data)
+                result = execute_file_operation(operation)
+                
+            elif task_type == "program_control":
+                action = data.get("action")
+                
+                if action == "start":
+                    result = start_program(data.get("program_path"), data.get("args", []))
+                elif action == "stop":
+                    result = stop_program(data.get("pid"))
+                else:
+                    result = {"success": False, "error": f"Unknown program action: {action}"}
+            
+            elif task_type == "model_query":
+                target_model = data.get("target_model")
+                prompt = data.get("prompt")
+                
+                if not target_model or not prompt:
+                    result = {"success": False, "error": "Missing target_model or prompt"}
+                else:
+                    result = query_ollama_model(target_model, prompt)
+            
+            else:
+                result = {"success": False, "error": f"Unknown task type: {task_type}"}
+                
+            # Update task status
+            tasks[task_id]["status"] = "completed" if result.get("success", False) else "failed"
+            tasks[task_id]["result"] = result
+            
+        except Exception as e:
+            logger.error(f"Task processing error: {str(e)}")
+            tasks[task_id]["status"] = "failed"
+            tasks[task_id]["error"] = str(e)
+    
+    # Process task in background
+    background_tasks.add_task(process_task)
+    
+    return TaskResponse(
+        task_id=task_id,
+        status="processing",
+        result=None,
+        error=None
+    )
+
+@app.get("/task_status/{task_id}", response_model=TaskResponse)
+async def get_task_status(
+    task_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    """Get the status of a task"""
+    if task_id not in tasks:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+        
+    task = tasks[task_id]
+    
+    return TaskResponse(
+        task_id=task_id,
+        status=task["status"],
+        result=task.get("result"),
+        error=task.get("error")
+    )
+
+@app.get("/list_models", response_model=Dict[str, Any])
+async def list_models(
+    api_key: str = Depends(verify_api_key)
+):
+    """List all connected models"""
+    return {
+        "success": True,
+        "models": [
+            {
+                "model_id": model_id,
+                "type": info["type"],
+                "config": info["config"]
+            }
+            for model_id, info in connected_models.items()
+        ]
+    }
+
+@app.post("/disconnect_model/{model_id}", response_model=Dict[str, Any])
+async def disconnect_model(
+    model_id: str,
+    api_key: str = Depends(verify_api_key)
+):
+    """Disconnect from an AI model"""
+    if model_id not in connected_models:
+        return {"success": False, "error": f"Model {model_id} not connected"}
+        
+    del connected_models[model_id]
+    return {"success": True, "message": f"Model {model_id} disconnected"}
+
+# --- Main Entry Point ---
+
+def cleanup():
+    """Cleanup function to terminate all running processes"""
+    for pid, process in running_processes.items():
+        try:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        except Exception as e:
+            logger.error(f"Error terminating process {pid}: {str(e)}")
+
+def signal_handler(sig, frame):
+    """Handle termination signals"""
+    logger.info("Shutting down MCP server...")
+    cleanup()
+    sys.exit(0)
+
+# Register signal handlers
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+# Main entry point
+if __name__ == "__main__":
+    import uvicorn
+    
+    # Setup environment - move to config in production
+    host = "0.0.0.0"
+    port = 8000
+    
+    logger.info(f"Starting AI MCP server on {host}:{port}")
+    
+    uvicorn.run(app, host=host, port=port)
