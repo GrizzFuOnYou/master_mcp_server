@@ -1,6 +1,6 @@
 # AI Master Control Program (MCP) Server
 
-The AI MCP Server enables AI models, including locally hosted models with Ollama and cloud models like Claude, to interact with your computer system. It acts as a bridge that allows AI models to:
+The AI MCP Server enables AI models, including locally hosted models with Ollama and Claude Desktop, to interact with your computer system. It acts as a bridge that allows AI models to:
 
 - Execute system commands
 - Create, read, update, and delete files
@@ -13,7 +13,7 @@ The system consists of:
 
 1. **MCP Server**: Central server that processes requests from AI models
 2. **Client Library**: Enables easy integration with AI models
-3. **Model Connectors**: Interfaces with various AI model backends (Claude, Ollama, etc.)
+3. **Model Connectors**: Interfaces with various AI model backends (Ollama, Claude Desktop, etc.)
 4. **Task Execution Engine**: Performs system operations and program control
 
 ## Installation
@@ -22,13 +22,36 @@ The system consists of:
 
 - Python 3.8+
 - [Ollama](https://github.com/ollama/ollama) (optional, for local model hosting)
-- Anthropic API key (optional, for Claude integration)
+- [Claude Desktop](https://claude.ai/desktop) (recommended default model)
 
-### Setup
+### Automated Installation
+
+For quick and easy installation, use the provided installation script:
+
+```bash
+# Clone the repository
+git clone https://github.com/GrizzFuOnYou/master_mcp_server.git
+cd master_mcp_server
+
+# Run the installation script
+python install.py
+```
+
+The installation script will:
+1. Verify Python version compatibility
+2. Install all dependencies
+3. Create a directory structure
+4. Configure environment variables
+5. Create platform-specific startup scripts
+6. Set up Claude Desktop as the default AI model
+
+### Manual Setup
+
+If you prefer manual installation:
 
 1. Clone the repository:
    ```
-   git clone https://github.com/yourusername/master_mcp_server.git
+   git clone https://github.com/GrizzFuOnYou/master_mcp_server.git
    cd master_mcp_server
    ```
 
@@ -47,6 +70,14 @@ The system consists of:
 
 ### Starting the Server
 
+#### Using Startup Script (Recommended)
+
+After installation:
+- **Windows**: Run `start_mcp_server.bat`
+- **Linux/Mac**: Run `./start_mcp_server.sh`
+
+#### Manual Start
+
 Run the MCP server:
 
 ```
@@ -57,7 +88,15 @@ By default, the server will listen on `0.0.0.0:8000`.
 
 ### Connecting AI Models
 
-To connect an AI model to the MCP server, use the client library:
+#### Claude Desktop (Default)
+
+Claude Desktop is configured as the default model. To use it:
+
+1. Make sure Claude Desktop is running on your system
+2. The server will automatically attempt to connect on startup
+3. Claude Desktop should be available at the default location: `http://localhost:5000/api`
+
+If you need to manually connect:
 
 ```python
 from mcp_client import MCPClient
@@ -65,22 +104,40 @@ from mcp_client import MCPClient
 # Initialize client
 client = MCPClient("http://localhost:8000", "your-secret-api-key")
 
-# Connect to Claude (default model)
-result = client.connect_model(
-    "claude-3-5-sonnet",
-    "claude", 
-    {
-        "api_key": "your-anthropic-api-key",
-        "model_id": "claude-3-5-sonnet-20240620",
-        "max_tokens": 1000,
-        "temperature": 0.7
-    }
-)
-print(f"Claude connection result: {result}")
+# Connect to Claude Desktop
+result = client.connect_model("claude-desktop", "claude", {"api_url": "http://localhost:5000/api"})
+print(f"Connection result: {result}")
+```
+
+#### Claude Desktop Connection JSON
+
+If you need to manually configure Claude Desktop integration, use the following JSON configuration:
+
+```json
+{
+  "model_id": "claude-desktop",
+  "model_type": "claude",
+  "config": {
+    "api_url": "http://localhost:5000/api",
+    "temperature": 0.7,
+    "max_tokens": 1000
+  }
+}
+```
+
+#### Ollama Models
+
+To connect to an Ollama model:
+
+```python
+from mcp_client import MCPClient
+
+# Initialize client
+client = MCPClient("http://localhost:8000", "your-secret-api-key")
 
 # Connect to an Ollama model
 result = client.connect_model("llama2", "ollama", {"host": "http://localhost:11434"})
-print(f"Ollama connection result: {result}")
+print(f"Connection result: {result}")
 ```
 
 ### Executing System Operations
@@ -89,22 +146,22 @@ Once connected, AI models can perform various system operations:
 
 ```python
 # Execute a command
-result = client.execute_system_command("claude-3-5-sonnet", "echo", ["Hello, World!"])
+result = client.execute_system_command("claude-desktop", "echo", ["Hello, World!"])
 
 # Write a file
-result = client.write_file("claude-3-5-sonnet", "test.txt", "This is a test file created by Claude!")
+result = client.write_file("claude-desktop", "test.txt", "This is a test file created by Claude!")
 
 # Read a file
-result = client.read_file("claude-3-5-sonnet", "test.txt")
+result = client.read_file("claude-desktop", "test.txt")
 
 # Start a program
-result = client.start_program("claude-3-5-sonnet", "notepad.exe")
+result = client.start_program("claude-desktop", "notepad.exe")
 
 # Stop a program
-result = client.stop_program("claude-3-5-sonnet", pid)
+result = client.stop_program("claude-desktop", pid)
 
-# Query the model
-result = client.query_model("claude-3-5-sonnet", "claude-3-5-sonnet", "What is the capital of France?")
+# Query the AI model
+result = client.query_model("claude-desktop", "claude-desktop", "What is the capital of France?")
 ```
 
 ## API Reference
@@ -133,17 +190,15 @@ result = client.query_model("claude-3-5-sonnet", "claude-3-5-sonnet", "What is t
 
 ## Model Configuration
 
-### Claude Configuration
+### Claude Desktop Configuration
 
-To connect to a Claude model, use the following configuration:
+To connect to Claude Desktop, use the following configuration:
 
 ```json
 {
-  "api_key": "your-anthropic-api-key",
-  "model_id": "claude-3-5-sonnet-20240620",
-  "base_url": "https://api.anthropic.com",
-  "max_tokens": 1000,
-  "temperature": 0.7
+  "api_url": "http://localhost:5000/api",
+  "temperature": 0.7,
+  "max_tokens": 1000
 }
 ```
 
@@ -166,6 +221,26 @@ Security measures implemented:
 - Logging of all operations
 - Configurable permissions (coming soon)
 - Rate limiting (coming soon)
+
+## Troubleshooting
+
+### Claude Desktop Connection Issues
+
+If you encounter issues connecting to Claude Desktop:
+
+1. Ensure Claude Desktop is running
+2. Verify the API URL (default: `http://localhost:5000/api`)
+3. Check the logs for specific error messages
+4. Restart Claude Desktop and try again
+
+### Ollama Connection Issues
+
+If you encounter issues connecting to Ollama:
+
+1. Ensure Ollama is running (`ollama serve`)
+2. Verify the model exists (`ollama list`)
+3. Check the API URL (default: `http://localhost:11434`)
+4. Try pulling the model again (`ollama pull modelname`)
 
 ## Extension Points
 
