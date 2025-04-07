@@ -22,6 +22,14 @@ from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
+# Import model connectors dynamically
+try:
+    # Import Claude Desktop connector if available
+    from models.claude_desktop import ClaudeDesktopConnector, DEFAULT_CLAUDE_CONFIG
+    CLAUDE_DESKTOP_AVAILABLE = True
+except ImportError:
+    CLAUDE_DESKTOP_AVAILABLE = False
+
 # --- Models ---
 
 class SystemCommand(BaseModel):
@@ -70,7 +78,7 @@ app.add_middleware(
 )
 
 # Security setup - use environment variable in production
-API_KEY = "your-secret-api-key"  # Replace with secure key management
+API_KEY = os.getenv("MCP_API_KEY", "your-secret-api-key")
 security = HTTPBearer()
 
 # Setup logging
@@ -307,56 +315,48 @@ def query_ollama_model(model_id: str, prompt: str) -> Dict[str, Any]:
         logger.error(f"Ollama query error: {str(e)}")
         return {"success": False, "error": str(e)}
 
-# --- Claude Integration ---
+# --- Claude Desktop Integration ---
 
-def connect_to_claude(model_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Connect to a Claude model"""
+def connect_to_claude_desktop(model_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Connect to Claude Desktop"""
+    if not CLAUDE_DESKTOP_AVAILABLE:
+        return {
+            "success": False,
+            "error": "Claude Desktop connector module not available. Ensure models/claude_desktop.py exists."
+        }
+        
     try:
-        # Dynamically import Claude connector
-        from claude_connector import create_claude_connector
+        api_url = config.get("api_url", "http://localhost:5000/api")
         
-        # Create Claude connector
-        connector = create_claude_connector(config)
+        # Create Claude Desktop connector
+        claude_connector = ClaudeDesktopConnector(api_url=api_url)
         
-        if connector is None:
-            return {
-                "success": False,
-                "error": "Failed to create Claude connector. Check configuration."
-            }
-            
-        # Check API access
-        health_result = connector.health_check()
+        # Connect to Claude Desktop
+        result = claude_connector.connect()
         
-        if not health_result.get("success", False):
-            return {
-                "success": False,
-                "error": f"Claude API access failed: {health_result.get('error', 'Unknown error')}"
-            }
+        if not result.get("success", False):
+            return result
             
         # Register model in connected models
         connected_models[model_id] = {
             "type": "claude",
             "config": config,
-            "connector": connector
+            "connector": claude_connector,
+            "model_info": result.get("model_info", {})
         }
         
         return {
             "success": True,
-            "message": f"Connected to Claude model {model_id}"
+            "message": f"Connected to Claude Desktop as {model_id}",
+            "model_info": result.get("model_info", {})
         }
         
-    except ImportError:
-        logger.error("Claude connector module not found")
-        return {
-            "success": False, 
-            "error": "Claude connector module not found. Please ensure claude_connector.py is available."
-        }
     except Exception as e:
-        logger.error(f"Claude connection error: {str(e)}")
+        logger.error(f"Claude Desktop connection error: {str(e)}")
         return {"success": False, "error": str(e)}
 
-def query_claude_model(model_id: str, prompt: str) -> Dict[str, Any]:
-    """Query a Claude model"""
+def query_claude_desktop_model(model_id: str, prompt: str, system_prompt: str = None) -> Dict[str, Any]:
+    """Query a Claude Desktop model"""
     if model_id not in connected_models:
         return {"success": False, "error": f"Model {model_id} not connected"}
         
@@ -365,22 +365,27 @@ def query_claude_model(model_id: str, prompt: str) -> Dict[str, Any]:
     if model_info["type"] != "claude":
         return {"success": False, "error": f"Model {model_id} is not a Claude model"}
         
-    connector = model_info.get("connector")
+    claude_connector = model_info.get("connector")
     
-    if not connector:
-        return {"success": False, "error": "Claude connector not found"}
-    
-    try:
-        # Get configuration options
-        max_tokens = model_info["config"].get("max_tokens", 1000)
-        temperature = model_info["config"].get("temperature", 0.7)
+    if not claude_connector:
+        return {"success": False, "error": f"Claude connector not found for model {model_id}"}
         
-        # Query model
-        result = connector.generate(prompt, max_tokens, temperature)
+    try:
+        # Generate response from Claude Desktop
+        temperature = model_info.get("config", {}).get("temperature", 0.7)
+        max_tokens = model_info.get("config", {}).get("max_tokens", 1000)
+        
+        result = claude_connector.generate(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens
+        )
+        
         return result
         
     except Exception as e:
-        logger.error(f"Claude query error: {str(e)}")
+        logger.error(f"Claude Desktop query error: {str(e)}")
         return {"success": False, "error": str(e)}
 
 # --- API Endpoints ---
@@ -390,7 +395,7 @@ async def connect_model(
     request: ModelConnectRequest,
     api_key: str = Depends(verify_api_key)
 ):
-    """Connect to an AI model (Ollama, Claude, etc.)"""
+    """Connect to an AI model (Ollama, Claude Desktop, etc.)"""
     model_id = request.model_id
     model_type = request.model_type
     config = request.config
@@ -398,7 +403,7 @@ async def connect_model(
     if model_type == "ollama":
         result = connect_to_ollama(model_id, config)
     elif model_type == "claude":
-        result = connect_to_claude(model_id, config)
+        result = connect_to_claude_desktop(model_id, config)
     else:
         result = {
             "success": False,
@@ -452,6 +457,7 @@ async def execute_task(
             elif task_type == "model_query":
                 target_model = data.get("target_model")
                 prompt = data.get("prompt")
+                system_prompt = data.get("system_prompt")
                 
                 if not target_model or not prompt:
                     result = {"success": False, "error": "Missing target_model or prompt"}
@@ -465,7 +471,7 @@ async def execute_task(
                         if model_type == "ollama":
                             result = query_ollama_model(target_model, prompt)
                         elif model_type == "claude":
-                            result = query_claude_model(target_model, prompt)
+                            result = query_claude_desktop_model(target_model, prompt, system_prompt)
                         else:
                             result = {"success": False, "error": f"Unsupported model type: {model_type}"}
             
@@ -520,7 +526,8 @@ async def list_models(
             {
                 "model_id": model_id,
                 "type": info["type"],
-                "config": info["config"]
+                "config": info["config"],
+                "model_info": info.get("model_info", {})
             }
             for model_id, info in connected_models.items()
         ]
@@ -535,7 +542,19 @@ async def disconnect_model(
     if model_id not in connected_models:
         return {"success": False, "error": f"Model {model_id} not connected"}
         
+    model_info = connected_models[model_id]
+    
+    # Perform type-specific disconnection
+    if model_info["type"] == "claude":
+        if "connector" in model_info:
+            try:
+                model_info["connector"].disconnect()
+            except Exception as e:
+                logger.error(f"Error disconnecting from Claude Desktop: {str(e)}")
+    
+    # Remove from connected models
     del connected_models[model_id]
+    
     return {"success": True, "message": f"Model {model_id} disconnected"}
 
 # --- Main Entry Point ---
@@ -567,9 +586,15 @@ if __name__ == "__main__":
     import uvicorn
     
     # Setup environment - move to config in production
-    host = "0.0.0.0"
-    port = 8000
+    host = os.getenv("MCP_HOST", "0.0.0.0")
+    port = int(os.getenv("MCP_PORT", "8000"))
     
     logger.info(f"Starting AI MCP server on {host}:{port}")
+    
+    # Check for Claude Desktop availability
+    if CLAUDE_DESKTOP_AVAILABLE:
+        logger.info("Claude Desktop connector available")
+    else:
+        logger.warning("Claude Desktop connector not available")
     
     uvicorn.run(app, host=host, port=port)
