@@ -53,7 +53,7 @@ class TaskResponse(BaseModel):
 class ModelConnectRequest(BaseModel):
     """Model for AI model connection requests"""
     model_id: str
-    model_type: str  # ollama, openai, etc.
+    model_type: str  # ollama, claude, openai, etc.
     config: Dict[str, Any] = {}
 
 # --- Core Server ---
@@ -307,6 +307,82 @@ def query_ollama_model(model_id: str, prompt: str) -> Dict[str, Any]:
         logger.error(f"Ollama query error: {str(e)}")
         return {"success": False, "error": str(e)}
 
+# --- Claude Integration ---
+
+def connect_to_claude(model_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """Connect to a Claude model"""
+    try:
+        # Dynamically import Claude connector
+        from claude_connector import create_claude_connector
+        
+        # Create Claude connector
+        connector = create_claude_connector(config)
+        
+        if connector is None:
+            return {
+                "success": False,
+                "error": "Failed to create Claude connector. Check configuration."
+            }
+            
+        # Check API access
+        health_result = connector.health_check()
+        
+        if not health_result.get("success", False):
+            return {
+                "success": False,
+                "error": f"Claude API access failed: {health_result.get('error', 'Unknown error')}"
+            }
+            
+        # Register model in connected models
+        connected_models[model_id] = {
+            "type": "claude",
+            "config": config,
+            "connector": connector
+        }
+        
+        return {
+            "success": True,
+            "message": f"Connected to Claude model {model_id}"
+        }
+        
+    except ImportError:
+        logger.error("Claude connector module not found")
+        return {
+            "success": False, 
+            "error": "Claude connector module not found. Please ensure claude_connector.py is available."
+        }
+    except Exception as e:
+        logger.error(f"Claude connection error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
+def query_claude_model(model_id: str, prompt: str) -> Dict[str, Any]:
+    """Query a Claude model"""
+    if model_id not in connected_models:
+        return {"success": False, "error": f"Model {model_id} not connected"}
+        
+    model_info = connected_models[model_id]
+    
+    if model_info["type"] != "claude":
+        return {"success": False, "error": f"Model {model_id} is not a Claude model"}
+        
+    connector = model_info.get("connector")
+    
+    if not connector:
+        return {"success": False, "error": "Claude connector not found"}
+    
+    try:
+        # Get configuration options
+        max_tokens = model_info["config"].get("max_tokens", 1000)
+        temperature = model_info["config"].get("temperature", 0.7)
+        
+        # Query model
+        result = connector.generate(prompt, max_tokens, temperature)
+        return result
+        
+    except Exception as e:
+        logger.error(f"Claude query error: {str(e)}")
+        return {"success": False, "error": str(e)}
+
 # --- API Endpoints ---
 
 @app.post("/connect_model", response_model=Dict[str, Any])
@@ -314,13 +390,15 @@ async def connect_model(
     request: ModelConnectRequest,
     api_key: str = Depends(verify_api_key)
 ):
-    """Connect to an AI model (Ollama, etc.)"""
+    """Connect to an AI model (Ollama, Claude, etc.)"""
     model_id = request.model_id
     model_type = request.model_type
     config = request.config
     
     if model_type == "ollama":
         result = connect_to_ollama(model_id, config)
+    elif model_type == "claude":
+        result = connect_to_claude(model_id, config)
     else:
         result = {
             "success": False,
@@ -378,7 +456,18 @@ async def execute_task(
                 if not target_model or not prompt:
                     result = {"success": False, "error": "Missing target_model or prompt"}
                 else:
-                    result = query_ollama_model(target_model, prompt)
+                    # Get model type
+                    if target_model not in connected_models:
+                        result = {"success": False, "error": f"Model {target_model} not connected"}
+                    else:
+                        model_type = connected_models[target_model]["type"]
+                        
+                        if model_type == "ollama":
+                            result = query_ollama_model(target_model, prompt)
+                        elif model_type == "claude":
+                            result = query_claude_model(target_model, prompt)
+                        else:
+                            result = {"success": False, "error": f"Unsupported model type: {model_type}"}
             
             else:
                 result = {"success": False, "error": f"Unknown task type: {task_type}"}
